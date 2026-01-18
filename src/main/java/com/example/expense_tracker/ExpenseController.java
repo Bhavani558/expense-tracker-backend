@@ -1,18 +1,15 @@
 package com.example.expense_tracker;
-
-import com.example.expense_tracker.model.User;
-import com.example.expense_tracker.repository.UserRepository;
-import com.example.expense_tracker.security.JwtUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
-
+import java.util.List;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
+
 @CrossOrigin(origins = "*")
+
 @RestController
 @RequestMapping("/api/expenses")
 public class ExpenseController {
@@ -20,80 +17,60 @@ public class ExpenseController {
     @Autowired
     private ExpenseRepository expenseRepository;
 
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private JwtUtils jwtUtils;
-
-    // ===== GET all expenses for logged-in user =====
-    @GetMapping
-    public List<Expense> getExpenses(@RequestHeader("Authorization") String authHeader) {
-        User user = getUserFromToken(authHeader);
-        return expenseRepository.findByUser(user);
-    }
-
-    // ===== POST new expense =====
     @PostMapping
-    public Expense addExpense(@RequestBody Expense expense, @RequestHeader("Authorization") String authHeader) {
-        User user = getUserFromToken(authHeader);
-        expense.setUser(user);
-
-        if (expense.getDate() == null) {
-            expense.setDate(LocalDate.now());
-        }
-
+    public Expense addExpense(@RequestBody Expense expense) {
         return expenseRepository.save(expense);
     }
 
-    // ===== PUT update expense =====
-    @PutMapping("/{id}")
-    public Expense updateExpense(@PathVariable Long id, @RequestBody Expense updatedExpense, @RequestHeader("Authorization") String authHeader) {
-        User user = getUserFromToken(authHeader);
-
-        Expense expense = expenseRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Expense not found"));
-
-        if (!expense.getUser().getId().equals(user.getId())) {
-            throw new RuntimeException("Unauthorized");
-        }
-
-        expense.setTitle(updatedExpense.getTitle());
-        expense.setAmount(updatedExpense.getAmount());
-        expense.setDescription(updatedExpense.getDescription());
-        expense.setCategory(updatedExpense.getCategory());
-        expense.setDate(updatedExpense.getDate());
-
-        return expenseRepository.save(expense);
+    @GetMapping
+    public List<Expense> getAllExpenses() {
+        return expenseRepository.findAll();
     }
 
-    // ===== DELETE expense =====
     @DeleteMapping("/{id}")
-    public void deleteExpense(@PathVariable Long id, @RequestHeader("Authorization") String authHeader) {
-        User user = getUserFromToken(authHeader);
-
-        Expense expense = expenseRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Expense not found"));
-
-        if (!expense.getUser().getId().equals(user.getId())) {
-            throw new RuntimeException("Unauthorized");
-        }
-
-        expenseRepository.delete(expense);
+    public void deleteExpense(@PathVariable Long id) {
+        expenseRepository.deleteById(id);
     }
+    @PutMapping("/{id}")
+    public Expense updateExpense(@PathVariable Long id, @RequestBody Expense updatedExpense) {
 
-    // ===== Expense Summary (total, today, this month) =====
+        Expense existingExpense = expenseRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Expense not found with id " + id));
+
+        existingExpense.setTitle(updatedExpense.getTitle());
+        existingExpense.setAmount(updatedExpense.getAmount());
+        existingExpense.setDescription(updatedExpense.getDescription());
+        existingExpense.setCategory(updatedExpense.getCategory());
+        existingExpense.setDate(updatedExpense.getDate());
+
+        return expenseRepository.save(existingExpense);
+    }
     @GetMapping("/summary-expense")
-    public Map<String, Double> getExpenseSummary(@RequestHeader("Authorization") String authHeader) {
-        User user = getUserFromToken(authHeader);
+    public Map<String, Double> getExpenseSummary() {
         Map<String, Double> summary = new HashMap<>();
+
+        List<Expense> expenses = expenseRepository.findAll();
+
+        double total = 0;
+        double today = 0;
+        double thisMonth = 0;
 
         LocalDate todayDate = LocalDate.now();
         YearMonth currentMonth = YearMonth.now();
 
-        double total = expenseRepository.getTotalExpense(user);
-        double today = expenseRepository.getTodayExpense(user, todayDate);
-        double thisMonth = expenseRepository.getMonthlyExpense(user, currentMonth.getMonthValue(), currentMonth.getYear());
+        for (Expense e : expenses) {
+            if (e.getDate() == null) continue; // ✅ only date check
+
+            total += e.getAmount();
+
+            if (e.getDate().isEqual(todayDate)) {
+                today += e.getAmount();
+            }
+
+            if (YearMonth.from(e.getDate()).equals(currentMonth)) {
+                thisMonth += e.getAmount();
+            }
+        }
 
         summary.put("total", total);
         summary.put("today", today);
@@ -101,68 +78,18 @@ public class ExpenseController {
 
         return summary;
     }
-
-    // ===== Filter expenses =====
     @GetMapping("/filter")
     public List<Expense> filterExpenses(
-            @RequestHeader("Authorization") String authHeader,
             @RequestParam(defaultValue = "All") String category,
             @RequestParam(required = false) String title) {
 
-        User user = getUserFromToken(authHeader);
-        return expenseRepository.filterExpenses(user, category, title);
+        return expenseRepository.filterExpenses(category, title);
     }
-
-    // ===== Helper to extract user from JWT =====
-    private User getUserFromToken(String authHeader) {
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw new RuntimeException("Missing or invalid Authorization header");
-        }
-
-        String token = authHeader.substring(7);
-        String email = jwtUtils.extractUsername(token); // <-- use extractUsername
-
-
-        return userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-    }
-    @GetMapping("/category-summary")
-    public Map<String, Double> getCategorySummary(
-            @RequestHeader("Authorization") String authHeader) {
-
-        User user = getUserFromToken(authHeader);
-        Map<String, Double> summary = new HashMap<>();
-
-        List<Object[]> results = expenseRepository.getExpenseByCategory(user);
-
-        for (Object[] row : results) {
-            summary.put((String) row[0], (Double) row[1]);
-        }
-        return summary;
-    }
-    @GetMapping("/budget-check")
-    public Map<String, Object> checkMonthlyBudget(
-            @RequestHeader("Authorization") String authHeader,
-            @RequestParam Double budget) {
-
-        User user = getUserFromToken(authHeader);
-        Map<String, Object> response = new HashMap<>();
-
-        YearMonth now = YearMonth.now();
-        Double spent = expenseRepository.getMonthlyExpense(
-                user, now.getMonthValue(), now.getYear());
-
-        response.put("budget", budget);
-        response.put("spent", spent);
-
-        if (spent > budget) {
-            response.put("status", "LIMIT_EXCEEDED");
-            response.put("overBy", spent - budget);
-        } else {
-            response.put("status", "WITHIN_LIMIT");
-            response.put("remaining", budget - spent);
-        }
-        return response;
+    @GetMapping("/test")
+    public String testEndpoint() {
+        return "Backend is live!";
     }
 
 }
+
+
